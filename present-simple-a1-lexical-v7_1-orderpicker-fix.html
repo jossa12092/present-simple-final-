@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>Present Simple A1–A1+ • Offline Canvas Quiz</title>
+<style>
+  html, body { margin:0; padding:0; height:100%; overflow:hidden; background:#0b1020; }
+  body {
+    -webkit-user-select:none; -moz-user-select:none; user-select:none;
+    -webkit-touch-callout:none; -webkit-text-size-adjust:100%;
+  }
+  * { -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  "use strict";
+
+  /* ---------------------- Config ---------------------- */
+  const ACCESS_CODE = "1100";
+  const QUESTIONS_PER_RUN = 25;
+  const TIME_PER_QUESTION = 60_000; // ms
+  const BG_GRADIENT = { c1: "#0f2027", c2: "#203a43", c3:"#2c5364" };
+  const ACCENTS = [
+    {fill:"rgba(255,255,255,0.22)", stroke:"rgba(255,255,255,0.38)"},
+    {fill:"rgba(255,230,0,0.18)", stroke:"rgba(255,230,0,0.55)"},
+    {fill:"rgba(255,120,0,0.16)", stroke:"rgba(255,120,0,0.48)"},
+    {fill:"rgba(255,70,70,0.14)", stroke:"rgba(255,70,70,0.48)"},
+    {fill:"rgba(130,200,255,0.18)", stroke:"rgba(130,200,255,0.45)"}
+  ];
+  const WHITE = "rgba(255,255,255,0.96)";
+  const SUBWHITE = "rgba(255,255,255,0.85)";
+  const TITLE = "Present Simple — A1–A1+ (Lexical verbs only)";
+  const MIN_TAP = 44;
+  const FONT_STACK = "'Poppins', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Liberation Sans', sans-serif";
+
+  /* ---------------------- Canvas State ---------------- */
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  let DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
+  let W=0, H=0;
+
+  const State = {
+    mode: "start",
+    blackoutMsg: "",
+    blackoutUntil: 0,
+    codeBuffer: "",
+    bank: [],
+    runQuestions: [],
+    qIndex: 0,
+    correctCount: 0,
+    startTs: 0,
+    qStartTs: 0,
+    timerLeft: TIME_PER_QUESTION,
+    answered: false,
+    lastResult: null,
+    tracker: [],
+  };
+
+  /* ---------------------- Utils ----------------------- */
+  function resize() {
+    DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 3));
+    const vw = Math.max(1, window.innerWidth);
+    const vh = Math.max(1, window.innerHeight);
+    canvas.style.width = vw + "px";
+    canvas.style.height = vh + "px";
+    canvas.width = Math.floor(vw * DPR);
+    canvas.height = Math.floor(vh * DPR);
+    W = canvas.width;
+    H = canvas.height;
+  }
+
+  function clear() {
+    const g = ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, BG_GRADIENT.c1);
+    g.addColorStop(0.6, BG_GRADIENT.c2);
+    g.addColorStop(1, BG_GRADIENT.c3);
+    ctx.fillStyle = g;
+    ctx.fillRect(0,0,W,H);
+    // soft radial lights
+    const r1 = Math.min(W,H)*0.45;
+    let rg = ctx.createRadialGradient(W*0.15, H*0.2, 0, W*0.15, H*0.2, r1);
+    rg.addColorStop(0, "rgba(255,255,255,0.10)");
+    rg.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(W*0.15,H*0.2,r1,0,Math.PI*2); ctx.fill();
+
+    const r2 = Math.min(W,H)*0.35;
+    rg = ctx.createRadialGradient(W*0.85, H*0.85, 0, W*0.85, H*0.85, r2);
+    rg.addColorStop(0, "rgba(255,200,120,0.07)");
+    rg.addColorStop(1, "rgba(255,200,120,0)");
+    ctx.fillStyle = rg; ctx.beginPath(); ctx.arc(W*0.85,H*0.85,r2,0,Math.PI*2); ctx.fill();
+  }
+
+  function setFont(sizePx, weight=400) { ctx.font = `${weight} ${sizePx}px ${FONT_STACK}`; }
+  function roundRect(x,y,w,h,r=16) {
+    ctx.beginPath();
+    const rr = Math.min(r, w/2, h/2);
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+  }
+  function drawGlass(x,y,w,h, paletteIdx=0, shadow=true) {
+    const pal = ACCENTS[paletteIdx % ACCENTS.length];
+    ctx.save();
+    if (shadow) {
+      ctx.shadowColor = "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = Math.max(16*DPR, 24);
+      ctx.shadowOffsetY = 4*DPR;
+    }
+    roundRect(x,y,w,h, Math.max(16*DPR, 12));
+    ctx.fillStyle = pal.fill; ctx.fill();
+    ctx.restore();
+    ctx.save();
+    roundRect(x+1*DPR,y+1*DPR,w-2*DPR,h-2*DPR, Math.max(16*DPR-1, 8));
+    ctx.strokeStyle = pal.stroke; ctx.lineWidth = Math.max(1.5*DPR,1); ctx.stroke();
+    ctx.restore();
+  }
+  function measureTextWrap(text, maxWidth, fontPx, weight=400) {
+    setFont(fontPx, weight);
+    const words = String(text).split(/\s+/);
+    const lines = [];
+    let cur = "";
+    for (let w of words) {
+      const next = cur ? (cur + " " + w) : w;
+      if (ctx.measureText(next).width <= maxWidth) cur = next;
+      else { if (cur) lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines;
+  }
+  function shuffle(arr){ for (let i=arr.length-1;i>0;i--){ const j=(Math.random()*(i+1))|0; [arr[i],arr[j]]=[arr[j],arr[i]]; } return arr; }
+  function sample(arr,k){ const a=arr.slice(); shuffle(a); return a.slice(0,k); }
+  function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
+
+  /* ---------------------- Content --------------------- */
+  const baseVerbs = ["go","come","make","take","see","get","give","tell","call","try","ask","work","look","use","find","put","keep","begin","help","talk","turn","start","show","play","run","move","write","read","open","close","walk","drive","ride","eat","drink","cook","clean","wash","buy","sell"];
+  const freqAdverbs = ["always","usually","often","sometimes","rarely","never"];
+  const timePhrases = ["every day","on Mondays","on weekends","in the morning","in the evening","after school","before work"];
+  const subjectsA1 = [
+    { s:"I", auxDo:"do", negDo:"don't", person3:false },
+    { s:"You", auxDo:"do", negDo:"don't", person3:false },
+    { s:"We", auxDo:"do", negDo:"don't", person3:false },
+    { s:"They", auxDo:"do", negDo:"don't", person3:false },
+    { s:"He", auxDo:"does", negDo:"doesn't", person3:true },
+    { s:"She", auxDo:"does", negDo:"doesn't", person3:true },
+    { s:"It", auxDo:"does", negDo:"doesn't", person3:true },
+  ];
+  const verbComplements = {
+    go: ["to school","to work","home","to class","to the park","to the shops"],
+    come: ["home","to school","to class","to my house"],
+    make: ["dinner","a cake","a sandwich","breakfast"],
+    take: ["the bus","a photo","a taxi"],
+    see: ["a friend","the teacher","the doctor","my parents"],
+    get: ["up early","ready","home"],
+    give: ["a present","money","the receipt"],
+    tell: ["a story","the truth","a joke"],
+    call: ["my mom","my dad","a friend"],
+    try: ["again","to help","to study"],
+    ask: ["a question","for help","the teacher"],
+    work: ["in an office","at a shop","at home"],
+    look: ["at the board","for my keys","out the window"],
+    use: ["a computer","a phone","this pen"],
+    find: ["my phone","the keys","a seat"],
+    put: ["the book on the table","the phone in my bag","the keys on the desk"],
+    keep: ["the room clean","quiet","the door closed"],
+    begin: ["at eight","on Monday","now"],
+    help: ["my dad","my friend","the teacher"],
+    talk: ["to my friend","to the teacher","on the phone"],
+    turn: ["on the light","off the TV","left"],
+    start: ["work at nine","class at eight","now"],
+    show: ["the picture","my ID","the answer"],
+    play: ["soccer","the guitar","tennis","basketball"],
+    run: ["in the park","to school","every morning"],
+    move: ["to a new house","to another city","the table"],
+    write: ["a letter","an email","my name","in my notebook"],
+    read: ["a book","the menu","the news","a text message"],
+    open: ["the door","the window","the box"],
+    close: ["the window","the door","the shop"],
+    walk: ["to school","to work","home"],
+    drive: ["to work","to school","a car"],
+    ride: ["a bike","a bus","a horse"],
+    eat: ["breakfast","lunch","dinner","a sandwich"],
+    drink: ["water","tea","coffee","milk"],
+    cook: ["dinner","rice","soup","pasta"],
+    clean: ["the room","the kitchen","the floor","the board"],
+    wash: ["the car","the dishes","my hands","my face"],
+    buy: ["food","a ticket","clothes","bread"],
+    sell: ["cars","books","fruit"]
+  };
+
+  function pick(a){ return a[(Math.random()*a.length)|0]; }
+  function pickComplement(v){ return pick(verbComplements[v] || ["at home","at school"]); }
+  function thirdPersonAff(v){
+    if (/(?:ch|sh|ss|x|z|o)$/i.test(v)) return v + "es";
+    if (v.endsWith("y") && !v.slice(-2, -1).match(/[aeiou]/)) return v.slice(0, -1) + "ies";
+    return v + "s";
+  }
+
+  const irregularPlurals = { man:"men", woman:"women", child:"children", person:"people", mouse:"mice", foot:"feet", tooth:"teeth" };
+  function pluralizeSingular(sg){
+    if (irregularPlurals[sg]) return irregularPlurals[sg];
+    if (sg.endsWith("y") && !/[aeiou]y$/i.test(sg)) return sg.slice(0,-1) + "ies";
+    if (/(?:ch|sh|ss|x|z|o)$/i.test(sg)) { if (/(?:photo|radio|piano)$/i.test(sg)) return sg + "s"; return sg + "es"; }
+    return sg + "s";
+  }
+  const singularPool = ["man","woman","child","person","mouse","foot","tooth","box","bus","class","dish","watch","radio","piano","photo","baby","city","toy","day","boy","glass","fox","church","wish"];
+
+  /* ---------------------- Generators ------------------ */
+  function mcqBestSentence(){
+    const subj = pick(subjectsA1);
+    const v = pick(baseVerbs);
+    const comp = pickComplement(v);
+    const ad = pick(freqAdverbs);
+    const time = pick(timePhrases);
+    const polarity = Math.random()<0.6 ? "Affirmative" : "Negative";
+    const prompt = "IELTS/TOEFL — Which sentence is correct in the Present Simple (lexical verbs only)?";
+    const pill = `Type: ${polarity} • Focus: 3rd person & adverbs`;
+    const correct = polarity==="Affirmative"
+      ? (subj.person3 ? `${subj.s} ${ad} ${thirdPersonAff(v)} ${comp} ${time}.` : `${subj.s} ${ad} ${v} ${comp} ${time}.`)
+      : `${subj.s} ${ad} ${subj.negDo} ${v} ${comp} ${time}.`;
+    const w1 = polarity==="Affirmative"
+      ? (subj.person3 ? `${subj.s} ${thirdPersonAff(v)} ${ad} ${comp} ${time}.` : `${subj.s} ${v} ${ad} ${comp} ${time}.`)
+      : `${subj.s} ${subj.negDo} ${thirdPersonAff(v)} ${comp} ${time}.`;
+    const w2 = polarity==="Affirmative"
+      ? `${subj.s} ${subj.negDo} ${v} ${comp} ${time}.`
+      : `${subj.s} ${ad} ${v} not ${comp} ${time}.`;
+    const options = shuffle([correct,w1,w2]);
+    const answerIndex = options.indexOf(correct);
+    return {type:"mcq", prompt, pill, options, answerIndex};
+  }
+
+  function mcqCloze(){
+    const subj = pick(subjectsA1);
+    const v = pick(baseVerbs);
+    const comp = pickComplement(v);
+    const ad = pick(freqAdverbs);
+    const time = pick(timePhrases);
+    const negative = Math.random()<0.4;
+    const prompt = "IELTS/TOEFL — Complete the statement in the Present Simple (lexical verb).";
+    const pill = `Type: ${negative?"Negative":"Affirmative"} • Context: ${time}`;
+    const correct = negative ? `${ad} ${subj.negDo} ${v}` : (subj.person3 ? `${ad} ${thirdPersonAff(v)}` : `${ad} ${v}`);
+    const w1 = negative ? `${subj.negDo} ${ad} ${v}` : (subj.person3 ? `${thirdPersonAff(v)} ${ad}` : `${v} ${ad}`);
+    const w2 = negative ? `${subj.negDo} ${v}${subj.person3?"s":""}` : `${subj.negDo} ${v}`;
+    const sentence = `"I ___ ${comp} ${time}."`;
+    const options = shuffle([correct, w1, w2]).map(o=>o+" ");
+    const answerIndex = options.findIndex(o => o.trim() === correct);
+    return {type:"mcq", prompt: `${prompt}\n${sentence}`, pill, options, answerIndex};
+  }
+
+  function matchingLexical(){
+    const s1 = pick(subjectsA1);
+    const s2 = pick(subjectsA1);
+    const s3 = pick(subjectsA1);
+    const v1 = pick(baseVerbs);
+    const v2 = pick(baseVerbs);
+    const v3 = pick(baseVerbs);
+    const time = pick(timePhrases);
+    const left = [
+      `${s1.s} ___ ${pickComplement(v1)} ${time}.`,
+      `${s2.s} ___ ${pickComplement(v2)} ${time}.`,
+      `${s3.s} ___ ${pickComplement(v3)} ${time}.`
+    ];
+    const r = [
+      s1.person3 ? thirdPersonAff(v1) : v1,
+      `${s2.negDo} ${v2}`,
+      s3.person3 ? thirdPersonAff(v3) : v3
+    ];
+    let rightDer = r.slice();
+    do { shuffle(rightDer); } while (rightDer.some((v,i)=> v===r[i]));
+    const map = {}; for (let i=0;i<3;i++){ map[i] = rightDer.indexOf(r[i]); }
+    return { type:"matching", prompt:"Match each sentence to the correct verb form (don’t/doesn’t + base, or 3rd person -s/-es/-ies).", pill:"3 pairs • Tap left then right", left, right:rightDer, map, selections:{} };
+  }
+
+  function orderByNumber(){
+    // Build a sentence; tokens shown left; user assigns numbers 1..N using a picker on the right.
+    const subj = pick(subjectsA1);
+    const v = pick(baseVerbs);
+    const comp = pickComplement(v);
+    const time = pick(timePhrases);
+    const ad = pick(freqAdverbs);
+    const negative = Math.random()<0.4;
+    const targetTokens = negative
+      ? [subj.s, ad, subj.negDo, v, ...comp.split(" "), ...time.split(" ")]
+      : (subj.person3 ? [subj.s, ad, thirdPersonAff(v), ...comp.split(" "), ...time.split(" ")] : [subj.s, ad, v, ...comp.split(" "), ...time.split(" ")]);
+    const tokens = targetTokens.slice(0, Math.min(7, targetTokens.length)); // limit length
+    const n = tokens.length;
+    const left = tokens.slice(); shuffle(left); // scrambled words
+    const right = Array.from({length:n}, (_,i)=> (i+1).toString());
+    const map = {}; for (let i=0;i<n;i++){ map[i] = tokens.indexOf(left[i]); }
+    return { type:"order", prompt:"Organize the sentence: tap a number to assign the position for each word (1 = first).", pill:`Word order • Type: ${negative?"Negative":"Affirmative"} • 3rd person focus`, left, right, map, selections:Array(n).fill(null), picker:null };
+  }
+
+  function genPlural(){
+    const sg = pick(singularPool);
+    const correct = pluralizeSingular(sg);
+    let d1="", d2="";
+    if (irregularPlurals[sg]) { d1 = sg + "s"; d2 = sg + "es"; }
+    else if (sg.endsWith("y") && !/[aeiou]y$/i.test(sg)) { d1 = sg + "s"; d2 = sg.slice(0,-1) + "ys"; }
+    else if (/(?:ch|sh|ss|x|z)$/i.test(sg)) { d1 = sg + "s"; d2 = sg.slice(0,-1) + "es"; }
+    else if (/o$/i.test(sg) && !/(photo|radio|piano)$/i.test(sg)) { d1 = sg + "s"; d2 = sg + "oes"; }
+    else { d1 = sg + "es"; d2 = sg + "ss"; }
+    let options = [correct, d1, d2].map(x=>x.toLowerCase());
+    options = Array.from(new Set(options));
+    while (options.length<3) options.push(correct+"s");
+    options = options.slice(0,3);
+    shuffle(options);
+    const answerIndex = options.findIndex(o => o === correct.toLowerCase());
+    return { type:"plural", prompt:"Make it plural.", pill:`Singular: ${sg}`, options, answerIndex };
+  }
+
+  function buildBank(){
+    const bank = [];
+    for (let i=0;i<12;i++) bank.push(mcqBestSentence());
+    for (let i=0;i<6;i++) bank.push(mcqCloze());
+    for (let i=0;i<8;i++) bank.push(matchingLexical());
+    for (let i=0;i<8;i++) bank.push(orderByNumber());
+    for (let i=0;i<8;i++) bank.push(genPlural());
+    return bank;
+  }
+
+  /* ---------------------- Layout ---------------------- */
+  function layout(dynamicGuideH=null) {
+    const pad = Math.max(12*DPR, 10);
+    const headerH = Math.max(68*DPR, H*0.11);
+    const progressH = Math.max(8*DPR, 6);
+    const guideH = dynamicGuideH ?? Math.max(H*0.16, 130*DPR);
+    const contentTop = headerH + progressH + pad*0.8 + guideH + pad*1.6;
+    const contentH = H - contentTop - pad - Math.max(110*DPR, H*0.14);
+    const trackerH = Math.max(110*DPR, H*0.14);
+    return { pad, headerH, progressH, guideH, contentTop, contentH, trackerH };
+  }
+
+  let hitRegions = [];
+  function registerHit(x,y,w,h, handler){ hitRegions.push({x,y,w,h, handler}); }
+
+  function drawHeader(tLeftMs){
+    const {pad, headerH} = layout();
+    const x = pad, y = pad, w = W - pad*2, h = headerH - pad*2;
+    drawGlass(x, y, w, h, 0, true);
+
+    const isSmall = W < 480*DPR;
+    const fontTitle = isSmall ? 20*DPR : 24*DPR;
+    setFont(fontTitle, 800);
+    ctx.fillStyle = WHITE;
+    ctx.textBaseline = isSmall ? "top" : "middle";
+    const titleX = x + 14*DPR;
+    const titleY = isSmall ? y + 12*DPR : y + h/2;
+    ctx.fillText(TITLE, titleX, titleY);
+
+    const chip = measureTimerChip(tLeftMs);
+    const tx = x + w - 14*DPR - chip.w;
+    const ty = isSmall ? (titleY + fontTitle*1.4) : (y + (h - chip.h)/2);
+    drawTimerChip(tx, ty, tLeftMs);
+  }
+  function measureTimerChip(tLeftMs){
+    const secs = Math.ceil(tLeftMs/1000);
+    const f = 16*DPR; setFont(f,800);
+    const tw = ctx.measureText(secs+"s").width;
+    return { w: tw + 24*DPR + 32*DPR, h: f + 16*DPR };
+  }
+  function drawTimerChip(x,y,tLeftMs){
+    const {w,h} = measureTimerChip(tLeftMs);
+    drawGlass(x,y,w,h,1,false);
+    const secs = Math.ceil(tLeftMs/1000);
+    const frac = clamp(tLeftMs / TIME_PER_QUESTION, 0, 1);
+    const cx = x + 24*DPR, cy = y + h/2, rad = Math.min(12*DPR, h*0.35);
+    ctx.beginPath(); ctx.arc(cx, cy, rad, -Math.PI/2, -Math.PI/2 + Math.PI*2*frac, false);
+    ctx.lineWidth = Math.max(3*DPR,2); ctx.strokeStyle = WHITE; ctx.stroke();
+    setFont(16*DPR,800); ctx.fillStyle = WHITE; ctx.textBaseline="middle";
+    ctx.fillText(secs+"s", x + 32*DPR + 18*DPR, cy);
+  }
+
+  function drawGuide(prompt, pillText){
+    const {pad, headerH, progressH} = layout();
+    const x = pad, y = headerH + progressH + pad*0.8, w = W - pad*2;
+    const maxW = w - 32*DPR;
+    let fontPrompt = Math.min(22*DPR, Math.max(18*DPR, W*0.035));
+    let lines = measureTextWrap(prompt, maxW, fontPrompt, 800);
+    while (lines.length>2 && fontPrompt>16*DPR) { fontPrompt -= 1*DPR; lines = measureTextWrap(prompt, maxW, fontPrompt, 800); }
+    const topPad = 12*DPR, gap = 10*DPR;
+    const promptH = lines.length * (fontPrompt*1.2);
+    const pillF = 14*DPR;
+    const pillTw = ctx.measureText(pillText||"").width;
+    const pillH = pillText ? (pillF + 8*DPR*2) : 0;
+    const cardH = topPad + promptH + (pillText? (gap + pillH) : 0) + topPad;
+    drawGlass(x, y, w, cardH, 2, true);
+    ctx.fillStyle = WHITE; ctx.textAlign="center"; ctx.textBaseline="top";
+    setFont(fontPrompt, 800);
+    lines.forEach((ln, i)=> ctx.fillText(ln, x + w/2, y + topPad + i*(fontPrompt*1.2)));
+    if (pillText) {
+      const pw = pillTw + 12*DPR*2, ph = pillF + 8*DPR*2, px = x + (w - pw)/2, py = y + topPad + promptH + gap;
+      drawGlass(px, py, pw, ph, 3, false);
+      setFont(pillF,700); ctx.fillStyle=WHITE; ctx.textAlign="left"; ctx.textBaseline="middle";
+      ctx.fillText(pillText, px + 12*DPR, py + ph/2);
+    }
+    return cardH;
+  }
+
+  function drawTracker() {
+    const {trackerH} = layout();
+    const rows = 2;
+    const cols = Math.ceil(QUESTIONS_PER_RUN/rows);
+    const dotR = Math.max(7*DPR, Math.min(10*DPR, Math.floor(W/(cols*6))));
+    const gap = dotR*1.8;
+    const totalW = cols*(dotR*2) + (cols-1)*gap;
+    const totalH = rows*(dotR*2) + (rows-1)*gap;
+    const x0 = (W - totalW)/2;
+    const y0 = H - trackerH + (trackerH - totalH)/2;
+    for (let i=0;i<QUESTIONS_PER_RUN;i++){
+      const r = Math.floor(i/cols), c = i % cols;
+      const cx = x0 + c*(dotR*2 + gap) + dotR;
+      const cy = y0 + r*(dotR*2 + gap) + dotR;
+      let col = "rgba(255,255,255,0.35)";
+      if (i < State.qIndex) { const val = State.tracker[i]; col = val===true ? "rgba(0,255,170,0.95)" : "rgba(255,90,90,0.95)"; }
+      else if (i === State.qIndex) col = "rgba(255,255,255,0.9)";
+      ctx.beginPath(); ctx.arc(cx, cy, dotR, 0, Math.PI*2); ctx.fillStyle = col; ctx.fill();
+    }
+  }
+
+  function renderQuiz(){
+    clear();
+    const q = State.runQuestions[State.qIndex];
+    drawHeader(State.timerLeft);
+    const pill = q.pill || (q.type==="plural"? q.pill : "");
+    const guideH = drawGuide(q.prompt, pill);
+    const {contentTop, pad} = layout(guideH);
+    const cx = pad, cy = contentTop;
+    const cw = W - pad*2, ch = H - cy - pad - Math.max(110*DPR, H*0.14);
+    drawGlass(cx, cy, cw, ch, 0, true);
+
+    if (q.type==="mcq" || q.type==="plural") {
+      const optCount = 3, gap = Math.max(10*DPR, 8);
+      const optH = Math.min((ch - gap*(optCount+1))/optCount, Math.max(64*DPR, (H>=W? 72*DPR: 66*DPR)));
+      let oy = cy + gap;
+      for (let i=0;i<optCount;i++){
+        const ox = cx + gap, ow = cw - gap*2;
+        drawGlass(ox, oy, ow, optH, 4, true);
+        const label = ["A)","B)","C)"][i];
+        setFont(16*DPR,800); ctx.textAlign="left"; ctx.textBaseline="top"; ctx.fillStyle=WHITE;
+        const textPad = 12*DPR; ctx.fillText(label, ox + textPad, oy + textPad);
+        const txt = q.options[i];
+        let f = Math.min(18*DPR, Math.max(16*DPR, W*0.035));
+        let lines = measureTextWrap(txt, ow - (textPad*2 + 48*DPR), f, 600);
+        while ((lines.length>2) && f>14*DPR) { f -= 1*DPR; lines = measureTextWrap(txt, ow - (textPad*2 + 48*DPR), f, 600); }
+        setFont(f,600); ctx.fillStyle=WHITE;
+        const baseY = oy + textPad + 18*DPR;
+        lines.forEach((ln,k)=> ctx.fillText(ln, ox + textPad, baseY + k*(f*1.25)) );
+        registerHit(ox, oy, ow, optH, ()=> handleAnswer(i));
+        oy += optH + gap;
+      }
+    } else if (q.type==="matching" || q.type==="order") {
+      const innerPad = Math.max(12*DPR, 10);
+      const colGap = Math.max(12*DPR, 8);
+      const rows = q.left.length;
+      const cardW = (cw - innerPad*2 - colGap)/2;
+      const rowH = Math.min((ch - innerPad*2 - colGap*(rows-1))/rows, Math.max(56*DPR, 70*DPR));
+      let ly = cy + innerPad;
+      const leftRects=[], rightRects=[];
+      for (let i=0;i<rows;i++){
+        const lx = cx + innerPad;
+        drawGlass(lx, ly, cardW, rowH, 1, true);
+        setFont(q.type==="order"?18*DPR:16*DPR,800); ctx.fillStyle=WHITE; ctx.textAlign="left"; ctx.textBaseline="middle";
+        ctx.fillText(q.left[i], lx + 12*DPR, ly + rowH/2);
+        leftRects.push({x:lx,y:ly,w:cardW,h:rowH,idx:i});
+
+        const rx = lx + cardW + colGap;
+        drawGlass(rx, ly, cardW, rowH, 3, true);
+        const label = q.type==="order" ? (q.selections[i]==null ? "?" : String(q.selections[i]+1)) : q.right[i];
+        setFont(18*DPR,800); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle=WHITE;
+        ctx.fillText(label, rx + cardW/2, ly + rowH/2);
+        rightRects.push({x:rx,y:ly,w:cardW,h:rowH,idx:i});
+        ly += rowH + colGap;
+      }
+      if (q.type==="matching"){
+        leftRects.forEach(r=> registerHit(r.x,r.y,r.w,r.h, ()=> matchingTapLeft(q, r.idx)) );
+        rightRects.forEach(r=> registerHit(r.x,r.y,r.w,r.h, ()=> matchingTapRight(q, r.idx)) );
+      } else {
+        // order: tap on either left token or right "?" to open number picker
+        const openFor = (rect)=> ()=> openNumberPicker(q, rect);
+        leftRects.forEach(r=> registerHit(r.x,r.y,r.w,r.h, openFor(r)) );
+        rightRects.forEach(r=> registerHit(r.x,r.y,r.w,r.h, openFor(r)) );
+      }
+
+      // Live preview + Clear button (order type)
+      if (q.type==="order"){
+        const previewY = cy + ch - innerPad - 56*DPR;
+        drawGlass(cx + innerPad, previewY, cw - innerPad*2 - 120*DPR, 56*DPR, 0, true);
+        const built = buildPreview(q);
+        setFont(16*DPR,700); ctx.fillStyle=WHITE; ctx.textAlign="left"; ctx.textBaseline="middle";
+        ctx.fillText(built, cx + innerPad + 12*DPR, previewY + 28*DPR);
+        // Clear button
+        const bx = cx + cw - innerPad - 100*DPR, by = previewY, bw = 100*DPR, bh = 56*DPR;
+        drawGlass(bx, by, bw, bh, 4, true);
+        setFont(16*DPR,900); ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.fillText("Clear", bx + bw/2, by + bh/2);
+        registerHit(bx, by, bw, bh, ()=> { q.selections = q.selections.map(()=>null); q.picker=null; });
+      }
+
+      // Number picker overlay
+      if (q.type==="order" && q.picker){
+        const {x,y,w,h,n} = q.picker;
+        // 1) background close region FIRST (lower priority)
+        registerHit(0,0,W,H, ()=>{ q.picker=null; } );
+        // 2) picker card
+        drawGlass(x,y,w,h,2,true);
+        const cols = Math.min(5, n);
+        const rowsN = Math.ceil(n/cols);
+        const cellW = (w - 12*DPR*(cols+1))/cols;
+        const cellH = (h - 12*DPR*(rowsN+1))/rowsN;
+        let idx = 0;
+        for (let r=0;r<rowsN;r++){
+          for (let c=0;c<cols;c++){
+            if (idx>=n) break;
+            const cx2 = x + 12*DPR + c*(cellW + 12*DPR);
+            const cy2 = y + 12*DPR + r*(cellH + 12*DPR);
+            drawGlass(cx2, cy2, cellW, cellH, 4, true);
+            setFont(18*DPR,900); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle=WHITE;
+            ctx.fillText(String(idx+1), cx2 + cellW/2, cy2 + cellH/2);
+            const chooseIdx = idx; // capture
+            // register AFTER the background so cells have priority
+            registerHit(cx2, cy2, cellW, cellH, ()=> assignNumber(q, chooseIdx) );
+            idx++;
+          }
+        }
+      }
+    }
+
+    if (State.answered && State.lastResult!=null) {
+      const msg = State.lastResult ? "✅ Correct!" : "❌ Incorrect!";
+      const f = 20*DPR;
+      setFont(f,900); ctx.textAlign="center"; ctx.textBaseline="bottom";
+      ctx.fillStyle = State.lastResult ? "rgba(0,255,170,0.98)" : "rgba(255,80,80,0.98)";
+      ctx.fillText(msg, W/2, cy + (H - cy)*0.98);
+    }
+    drawTracker();
+  }
+
+  function buildPreview(q){
+    const pairs = q.selections.map((num, li)=> ({num, token:q.left[li]}))
+      .filter(p=> Number.isInteger(p.num))
+      .sort((a,b)=> a.num - b.num)
+      .map(p=> p.token);
+    const txt = pairs.join(" ");
+    return txt ? txt + "." : "—";
+  }
+
+  /* -------- Matching interactions -------- */
+  function matchingTapLeft(q, li){ if (q._pendingLeft === li) { q._pendingLeft = null; return; } q._pendingLeft = li; }
+  function matchingTapRight(q, ri){
+    if (q._pendingLeft == null) return;
+    q.selections[q._pendingLeft] = ri; q._pendingLeft = null;
+    const n = q.left.length;
+    if (Array.from({length:n}, (_,i)=>i).every(i => Number.isInteger(q.selections[i]))) {
+      const ok = Array.from({length:n}, (_,i)=> q.selections[i] === q.map[i]).every(Boolean);
+      handleAnswer(ok ? "__MATCH_OK__" : "__MATCH_FAIL__");
+    }
+  }
+
+  /* -------- Order-by-number interactions -------------- */
+  function openNumberPicker(q, rect){
+    const n = q.left.length;
+    const w = Math.min(W*0.6, Math.max(240*DPR, 160*DPR + n*6));
+    const h = Math.min(H*0.45, Math.max(160*DPR, 120*DPR + n*4));
+    const x = rect.x + rect.w - w;
+    const y = rect.y - h - 8*DPR < 0 ? rect.y + rect.h + 8*DPR : rect.y - h - 8*DPR;
+    q._targetIndex = rect.idx;
+    q.picker = {x, y, w, h, n};
+  }
+  function assignNumber(q, numIdx){
+    const li = q._targetIndex;
+    q.selections[li] = numIdx;
+    q.picker = null;
+    // If all assigned, check
+    if (q.selections.every(n => Number.isInteger(n))) {
+      const ok = q.selections.every((num, li2) => num === q.map[li2]);
+      handleAnswer(ok ? "__MATCH_OK__" : "__MATCH_FAIL__");
+    }
+  }
+
+  /* ---------------- Answer flow ----------------------- */
+  let nextTimeout = 0;
+  function handleAnswer(chosen){
+    if (State.answered) return;
+    const q = State.runQuestions[State.qIndex];
+    let correct = false;
+    if (q.type==="matching" || q.type==="order") correct = (chosen==="__MATCH_OK__");
+    else { const idx = (typeof chosen==="number") ? chosen : -1; correct = (idx === q.answerIndex); }
+    State.answered = true; State.lastResult = correct; State.tracker[State.qIndex] = correct; if (correct) State.correctCount++;
+    if (nextTimeout) cancelAnimationFrame(nextTimeout);
+    const target = performance.now() + 1000;
+    function schedule(){ if (performance.now() >= target) goNext(); else { nextTimeout = requestAnimationFrame(schedule); } }
+    nextTimeout = requestAnimationFrame(schedule);
+  }
+  function goNext(){ State.answered=false; State.lastResult=null; State.qIndex++; if (State.qIndex>=QUESTIONS_PER_RUN){ State.mode="finish"; return; } State.qStartTs=performance.now(); State.timerLeft=TIME_PER_QUESTION; }
+
+  /* ---------------- Run control ----------------------- */
+  function startNewRun(){
+    State.bank = buildBank();
+    const picks = [];
+    picks.push(...sample(State.bank.filter(q=>q.type==="mcq"), 12));
+    picks.push(...sample(State.bank.filter(q=>q.type==="matching"), 5));
+    picks.push(...sample(State.bank.filter(q=>q.type==="order"), 4));
+    picks.push(...sample(State.bank.filter(q=>q.type==="plural"), 4));
+    while (picks.length < QUESTIONS_PER_RUN) { const any = State.bank[(Math.random()*State.bank.length)|0]; if (!picks.includes(any)) picks.push(any); }
+    shuffle(picks); picks.length = QUESTIONS_PER_RUN;
+    State.runQuestions = picks;
+    State.qIndex=0; State.correctCount=0; State.tracker = new Array(QUESTIONS_PER_RUN).fill(null);
+    State.startTs = performance.now(); State.qStartTs = State.startTs; State.timerLeft = TIME_PER_QUESTION;
+    State.answered=false; State.lastResult=null; State.mode="quiz";
+  }
+
+  /* ---------------- Security -------------------------- */
+  let blockedCombos = new Set(["F12","PrintScreen","Ctrl+S","Ctrl+U","Ctrl+P","Ctrl+C","Ctrl+X","Ctrl+V","Ctrl+A","Meta+S","Meta+U","Meta+P","Meta+C","Meta+X","Meta+V","Meta+A"]);
+  function keyToCombo(e){ const parts=[]; if(e.ctrlKey) parts.push("Ctrl"); if(e.metaKey) parts.push("Meta"); if(e.shiftKey) parts.push("Shift"); const k=e.key; parts.push(k && k.length===1 ? k.toUpperCase() : k); return parts.join("+"); }
+  function securityBlackout(message="⚠️ Security Alert", duration=1500){
+    State.mode="blackout"; State.blackoutMsg=message; State.blackoutUntil=performance.now()+duration;
+    setTimeout(()=>{ State.mode="start"; State.codeBuffer=""; }, duration);
+  }
+  function onKeyDown(e){
+    const combo = keyToCombo(e);
+    if (blockedCombos.has(combo) || e.key==="F12") { e.preventDefault(); e.stopPropagation(); securityBlackout("⚠️ Security Alert: Protected keys detected. Enter access code.", 1600); return false; }
+    if (State.mode==="start" && /^[0-9]$/.test(e.key)) { if (State.codeBuffer.length<8) State.codeBuffer += e.key; }
+  }
+  function onContextMenu(e){ e.preventDefault(); }
+  function onCopyCutPaste(e){ e.preventDefault(); }
+  function onVisibilityChange(){ if (document.hidden) securityBlackout("⚠️ Security Alert: Focus lost. Enter access code.", 1800); }
+  function onBlur(){ securityBlackout("⚠️ Security Alert: Focus lost. Enter access code.", 1800); }
+  function onPageHide(){ securityBlackout("⚠️ Security Alert: Focus lost. Enter access code.", 1800); }
+  function onResize(){ resize(); if (State.mode!=="start") securityBlackout("⚠️ Security Alert: Screen split detected. Enter access code.", 1800); }
+  function onDragStart(e){ e.preventDefault(); }
+
+  function getPointer(evt){
+    const rect = canvas.getBoundingClientRect();
+    let x=0, y=0;
+    if (evt.touches && evt.touches.length) { x = (evt.touches[0].clientX - rect.left) * DPR; y = (evt.touches[0].clientY - rect.top) * DPR; }
+    else { x = (evt.clientX - rect.left) * DPR; y = (evt.clientY - rect.top) * DPR; }
+    return {x,y};
+  }
+  function onTap(evt){
+    evt.preventDefault();
+    const p = getPointer(evt);
+    const mx=p.x, my=p.y;
+    for (let i=hitRegions.length-1; i>=0; i--){
+      const r = hitRegions[i];
+      if (mx>=r.x && mx<=r.x+r.w && my>=r.y && my<=r.y+r.h) {
+        if (Math.min(r.w,r.h) < MIN_TAP*DPR) continue;
+        r.handler(); return;
+      }
+    }
+  }
+
+  /* ---------------- Screens --------------------------- */
+  function drawStart(){
+    clear();
+    const margin = Math.max(16*DPR, 12);
+    const cardW = Math.min(W - margin*2, Math.max(360*DPR, W*0.92));
+    const cardH = Math.min(H - margin*2, Math.max(460*DPR, H*0.72));
+    const x = (W - cardW)/2, y = (H - cardH)/2;
+    drawGlass(x,y,cardW,cardH,0,true);
+
+    const titleF = Math.min(28*DPR, Math.max(22*DPR, W*0.045));
+    setFont(titleF,900); ctx.fillStyle=WHITE; ctx.textAlign="center"; ctx.textBaseline="top";
+    ctx.fillText(TITLE, x + cardW/2, y + 18*DPR);
+
+    setFont(16*DPR,700); ctx.fillStyle=SUBWHITE;
+    ctx.fillText("Access code required to start or resume.", x + cardW/2, y + 18*DPR + titleF*1.6);
+
+    const codeStr = State.codeBuffer.replace(/./g,"•");
+    const cw = Math.max(180*DPR, ctx.measureText("••••").width + 40*DPR);
+    const ch = 48*DPR, cx = x + (cardW - cw)/2, cy = y + cardH*0.42;
+    drawGlass(cx, cy, cw, ch, 2, false);
+    setFont(22*DPR,900); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle=WHITE;
+    ctx.fillText(codeStr || "----", cx + cw/2, cy + ch/2);
+
+    const cols=3, rows=4;
+    const keyW = Math.min(96*DPR, (cardW - 48*DPR)/3);
+    const keyH = Math.max(56*DPR, 44*DPR);
+    const startY = cy + ch + 16*DPR;
+    const keys = ["1","2","3","4","5","6","7","8","9","C","0","Start"];
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        const k = keys[r*cols+c];
+        const kx = x + (cardW - (keyW*cols + 12*DPR*(cols-1)))/2 + c*(keyW + 12*DPR);
+        const ky = startY + r*(keyH + 12*DPR);
+        drawGlass(kx, ky, keyW, keyH, 3, true);
+        setFont(18*DPR,900); ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle=WHITE;
+        ctx.fillText(k, kx + keyW/2, ky + keyH/2);
+        registerHit(kx, ky, keyW, keyH, ()=>{
+          if (k==="C") State.codeBuffer = "";
+          else if (k==="Start") { if (State.codeBuffer === ACCESS_CODE) startNewRun(); else { securityBlackout("❌ Wrong code. Try again.", 1200); State.codeBuffer = ""; } }
+          else if (State.codeBuffer.length<8) State.codeBuffer += k;
+        });
+      }
+    }
+  }
+
+  function drawFinish(){
+    clear();
+    const margin = Math.max(16*DPR, 12);
+    const cardW = Math.min(W - margin*2, Math.max(360*DPR, W*0.9));
+    const cardH = Math.min(H - margin*2, Math.max(320*DPR, H*0.55));
+    const x = (W - cardW)/2, y = (H - cardH)/2;
+    drawGlass(x,y,cardW,cardH,0,true);
+    const titleF = Math.min(26*DPR, Math.max(22*DPR, W*0.045));
+    setFont(titleF,900); ctx.fillStyle=WHITE; ctx.textAlign="center"; ctx.textBaseline="top";
+    ctx.fillText("Quiz Finished", x + cardW/2, y + 18*DPR);
+    const score5 = (State.correctCount/QUESTIONS_PER_RUN)*5;
+    setFont(18*DPR,800); ctx.fillStyle=WHITE;
+    ctx.fillText(`Your final score is ${score5.toFixed(1)} / 5.0`, x + cardW/2, y + 18*DPR + titleF*1.8);
+    setFont(14*DPR,700); ctx.fillStyle=SUBWHITE;
+    ctx.fillText("To try again, you will need the access code.", x + cardW/2, y + cardH - 24*DPR - 18*DPR);
+  }
+
+  function drawBlackout(){
+    ctx.fillStyle = "rgba(0,0,0,1)"; ctx.fillRect(0,0,W,H);
+    const msg = State.blackoutMsg || "⚠️ Security Alert";
+    const f = Math.min(22*DPR, Math.max(18*DPR, W*0.04));
+    setFont(f,900); ctx.fillStyle="rgba(255,80,80,0.98)"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(msg, W/2, H/2);
+  }
+
+  /* ---------------- Main Loop ------------------------- */
+  function update(){ if (State.mode==="quiz" && !State.answered){ State.timerLeft = Math.max(0, TIME_PER_QUESTION - (performance.now() - State.qStartTs)); if (State.timerLeft<=0) handleAnswer(-1); } }
+  function draw(){
+    hitRegions = [];
+    if (State.mode==="start") drawStart();
+    else if (State.mode==="quiz") renderQuiz();
+    else if (State.mode==="finish") drawFinish();
+    else if (State.mode==="blackout") drawBlackout();
+  }
+  function tick(){ update(); draw(); requestAnimationFrame(tick); }
+
+  function init(){
+    resize();
+    window.addEventListener("resize", onResize, {passive:true});
+    window.addEventListener("blur", onBlur, {passive:true});
+    document.addEventListener("visibilitychange", onVisibilityChange, {passive:true});
+    window.addEventListener("pagehide", onPageHide, {passive:true});
+    window.addEventListener("keydown", onKeyDown, {capture:true});
+    window.addEventListener("contextmenu", onContextMenu);
+    window.addEventListener("copy", onCopyCutPaste);
+    window.addEventListener("cut", onCopyCutPaste);
+    window.addEventListener("paste", onCopyCutPaste);
+    window.addEventListener("dragstart", onDragStart);
+    canvas.addEventListener("click", onTap);
+    canvas.addEventListener("touchstart", onTap, {passive:false});
+    State.mode="start";
+    requestAnimationFrame(tick);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
